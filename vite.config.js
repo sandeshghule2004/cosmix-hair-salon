@@ -5,12 +5,14 @@ import { VitePWA } from 'vite-plugin-pwa'
 export default defineConfig({
   plugins: [
     react(),
+
     VitePWA({
       registerType: 'autoUpdate',
+
       manifest: {
-        name: 'Cosmix Hair Salon',
-        short_name: 'Cosmix',
-        description: 'Cosmix Hair Salon booking app',
+        name: "Happy's Unisex Salon",
+        short_name: "Happy's Unisex Salon",
+        description: "Happy's Unisex Salon booking app",
         theme_color: '#161209',
         background_color: '#161209',
         display: 'standalone',

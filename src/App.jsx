@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react'
+import { supabase } from './lib/supabase'
 import {
   Scissors, Wallet, Bell, PlusCircle, Share2, User, Phone,
   ChevronLeft, Check, LogOut, Copy, BarChart3, MapPin, Star,
@@ -21,10 +22,10 @@ const FONT_DISPLAY = "'Fraunces', Georgia, serif";
 const FONT_BODY = "'Inter', system-ui, sans-serif";
 
 const SERVICES = [
-  { id: 'haircut', name: 'Signature Haircut', price: 150, duration: '30 min' },
-  { id: 'wash', name: 'Wash & Style', price: 120, duration: '20 min' },
-  { id: 'beardgroom', name: 'Beard Grooming', price: 120, duration: '20 min' },
-  { id: 'color', name: 'Hair Colour', price: 400, duration: '60 min' },
+  { id: 'haircut', dbId: 1, name: 'Signature Haircut', price: 150, duration: '30 min' },
+  { id: 'wash', dbId: 3, name: 'Wash & Style', price: 120, duration: '20 min' },
+  { id: 'beardgroom', dbId: 5, name: 'Beard Grooming', price: 120, duration: '20 min' },
+  { id: 'color', dbId: 4, name: 'Hair Colour', price: 400, duration: '60 min' },
 ];
 
 const ADDONS = [
@@ -97,7 +98,7 @@ function TopBar({ onHome }) {
         <span style={{ width: 30, height: 30, borderRadius: 9, background: `linear-gradient(150deg, ${COLORS.goldLight}, ${COLORS.gold})`, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 3px 10px rgba(201,150,46,0.4)' }}>
           <Scissors size={15} color={COLORS.bg} />
         </span>
-        <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 15, color: COLORS.cream, letterSpacing: 0.2 }}>Cosmix</span>
+        <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 15, color: COLORS.cream, letterSpacing: 0.2 }}>Happy's Unisex Salon </span>
       </button>
       <div className="flex items-center gap-1">
         <Star size={12} color={COLORS.gold} fill={COLORS.gold} />
@@ -138,6 +139,18 @@ function BottomNav({ active, onSelect }) {
 }
 
 export default function App() {
+  useEffect(() => {
+  async function testSupabase() {
+    const { data, error } = await supabase
+      .from('services')
+      .select('*')
+
+    console.log('Supabase data:', data)
+    console.log('Supabase error:', error)
+  }
+
+  testSupabase()
+}, [])
   const [loggedIn, setLoggedIn] = useState(false);
   const [phoneInput, setPhoneInput] = useState('');
   const [phone, setPhone] = useState('');
@@ -172,7 +185,7 @@ export default function App() {
   const [sessionRevenue, setSessionRevenue] = useState(0);
   const [addonSales, setAddonSales] = useState({ beard: 34, massage: 21, towel: 15, spa: 9 });
 
-  const referralCode = 'COSMIX-' + (phone ? phone.replace(/\D/g, '').slice(-4) || '2481' : '2481');
+  const referralCode = 'HAPPYSUNISEXSALON-' + (phone ? phone.replace(/\D/g, '').slice(-4) || '2481' : '2481');
 
   const today = new Date(2026, 8, 15);
   const lastVisitDate = new Date(2026, 7, 20);
@@ -209,26 +222,6 @@ export default function App() {
     return (svc ? svc.price : 0) + addonTotal;
   }
 
-  function confirmBooking() {
-    const total = serviceTotal();
-    if (bookingPayment === 'wallet') setBalance((b) => b - total);
-    if (lockedBonus > 0) {
-      setBalance((b) => b + lockedBonus);
-      setLockedBonus(0);
-    }
-    setVisits((v) => v + 1);
-    const svcName = SERVICES.find((s) => s.id === bookingService);
-    setTransactions((t) => [{ id: Date.now(), label: `${svcName ? svcName.name : 'Service'}${bookingAddons.length ? ' + add-ons' : ''}`, amount: -total, date: bookingDate }, ...t]);
-    setLastBookingTotal(total);
-    setAddonSales((prev) => {
-      const next = { ...prev };
-      bookingAddons.forEach((id) => { next[id] = (next[id] || 0) + 1; });
-      return next;
-    });
-    setSessionBookingsCount((c) => c + 1);
-    setSessionRevenue((r) => r + total);
-    setView('book-confirm');
-  }
   function resetBooking() {
     setBookingService(null);
     setBookingDate('');
@@ -238,6 +231,76 @@ export default function App() {
     setView('home');
   }
 
+  async function confirmBooking() {
+  const total = serviceTotal();
+  const svc = SERVICES.find((s) => s.id === bookingService);
+
+  if (!svc) {
+    console.error('Service not found');
+    return;
+  }
+
+  // Save booking to Supabase
+  const { data, error } = await supabase
+    .from('bookings')
+    .insert({
+       customer_name: profileName,
+      customer_phone: phone,
+      service_id: svc.dbId,
+      booking_date: bookingDate,
+      booking_time: bookingSlot,
+      status: 'confirmed',
+      payment_method: bookingPayment,
+      total_amount: total,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Booking save error:', error);
+    alert('Booking could not be saved. Check the console.');
+    return;
+  }
+
+  console.log('Booking saved:', data);
+
+  // Keep the existing app behavior
+  if (bookingPayment === 'wallet') {
+    setBalance((b) => b - total);
+  }
+
+  if (lockedBonus > 0) {
+    setBalance((b) => b + lockedBonus);
+    setLockedBonus(0);
+  }
+
+  setVisits((v) => v + 1);
+
+  setTransactions((t) => [
+    {
+      id: Date.now(),
+      label: `${svc.name}${bookingAddons.length ? ' + add-ons' : ''}`,
+      amount: -total,
+      date: bookingDate,
+    },
+    ...t,
+  ]);
+
+  setLastBookingTotal(total);
+
+  setAddonSales((prev) => {
+    const next = { ...prev };
+    bookingAddons.forEach((id) => {
+      next[id] = (next[id] || 0) + 1;
+    });
+    return next;
+  });
+
+  setSessionBookingsCount((c) => c + 1);
+  setSessionRevenue((r) => r + total);
+
+  setView('book-confirm');
+}
   function markReferralRewarded(id) {
     setReferrals((rs) => rs.map((r) => (r.id === id ? { ...r, status: 'rewarded' } : r)));
     setBalance((b) => b + 100);
@@ -266,15 +329,15 @@ export default function App() {
               <Star size={12} color={COLORS.gold} fill={COLORS.gold} />
               <span style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: COLORS.goldLight, fontWeight: 600 }}>4.7 rating &middot; 10 Google reviews</span>
             </div>
-            <h1 className="tracking-tight" style={{ fontFamily: FONT_DISPLAY, fontSize: 25, fontWeight: 700, color: COLORS.cream, lineHeight: 1.15 }}>Cosmix Hair Salon</h1>
+            <h1 className="tracking-tight" style={{ fontFamily: FONT_DISPLAY, fontSize: 25, fontWeight: 700, color: COLORS.cream, lineHeight: 1.15 }}>Happy's Unisex Salon</h1>
             <div className="flex items-start gap-2 mt-3">
               <MapPin size={14} color={COLORS.creamDim} style={{ marginTop: 2, flexShrink: 0 }} />
               <p style={{ fontFamily: FONT_BODY, fontSize: 12, color: COLORS.creamDim, lineHeight: 1.5 }}>
-                R8XW+CW9, Ayappa Mandir Rd, Gopi Nath Pura, Deolai, Chhatrapati Sambhajinagar, Maharashtra 431009
+                Shop no.6&7,chavan tower, opposite SBI Bank, sahakar Nagar, Chh.sambhajinagar Chh, Chhartapati Sambhajinagar, Maharashtra 431001
               </p>
             </div>
             <div className="flex gap-2 mt-4">
-              <a href="tel:09804659191" className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl" style={{ border: `1px solid ${COLORS.border}`, fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.cream, textDecoration: 'none', background: COLORS.card }}>
+              <a href="tel:7499376437" className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl" style={{ border: `1px solid ${COLORS.border}`, fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.cream, textDecoration: 'none', background: COLORS.card }}>
                 <Phone size={13} /> Call salon
               </a>
               <button onClick={() => setView('book-service')} className="flex-1 py-2.5 rounded-xl" style={{ background: `linear-gradient(150deg, ${COLORS.goldLight}, ${COLORS.gold})`, color: COLORS.bg, fontFamily: FONT_BODY, fontWeight: 700, fontSize: 12.5, boxShadow: '0 6px 18px rgba(201,150,46,0.35)' }}>
@@ -815,7 +878,7 @@ export default function App() {
           <span style={{ width: 64, height: 64, borderRadius: 18, background: `linear-gradient(150deg, ${COLORS.goldLight}, ${COLORS.gold})`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 18, boxShadow: '0 10px 30px rgba(201,150,46,0.4)' }}>
             <Scissors size={30} color={COLORS.bg} />
           </span>
-          <h1 className="tracking-tight" style={{ fontFamily: FONT_DISPLAY, fontSize: 25, fontWeight: 700, color: COLORS.cream, textAlign: 'center' }}>Cosmix Hair Salon</h1>
+          <h1 className="tracking-tight" style={{ fontFamily: FONT_DISPLAY, fontSize: 25, fontWeight: 700, color: COLORS.cream, textAlign: 'center' }}>Happy's Unisex Salon</h1>
           <p style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.creamDim, marginTop: 6, textAlign: 'center', lineHeight: 1.5, maxWidth: 260 }}>
             Real business flow &mdash; five screens that turn one visit into repeat business.
           </p>
