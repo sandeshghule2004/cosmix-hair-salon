@@ -234,32 +234,7 @@ export default function App() {
     setView('home');
   }
 
-  async function handleAdminLogin() {
-    const email = adminEmailInput.trim();
-    const password = adminPasswordInput;
-
-    if (!email || !password) {
-      setAdminError('Enter the admin email and password.');
-      return;
-    }
-
-    // Temporary app-level gate. We will replace this with Supabase Auth
-    // when we do the database/security changes.
-    const correctEmail = import.meta.env.VITE_ADMIN_EMAIL;
-    const correctPassword = import.meta.env.VITE_ADMIN_PASSWORD;
-
-    if (!correctEmail || !correctPassword) {
-      setAdminError('Admin credentials are not configured yet.');
-      return;
-    }
-
-    if (email !== correctEmail || password !== correctPassword) {
-      setAdminError('Incorrect admin email or password.');
-      return;
-    }
-
-    setAdminError('');
-    setAdminLoggedIn(true);
+  async function loadAdminBookings() {
     setAdminLoading(true);
 
     const { data, error } = await supabase
@@ -279,7 +254,56 @@ export default function App() {
     setAdminLoading(false);
   }
 
-  function adminLogout() {
+  async function handleAdminLogin() {
+    const email = adminEmailInput.trim();
+    const password = adminPasswordInput;
+
+    if (!email || !password) {
+      setAdminError('Enter the admin email and password.');
+      return;
+    }
+
+    setAdminError('');
+    setAdminLoading(true);
+
+    // Authenticate the owner through Supabase Auth.
+    const { data: authData, error: authError } =
+      await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+    if (authError || !authData?.user) {
+      console.error('Admin authentication error:', authError);
+      setAdminLoading(false);
+      setAdminError('Incorrect admin email or password.');
+      return;
+    }
+
+    // Authentication alone is not enough. The user must also be
+    // explicitly authorized in public.admin_users.
+    const { data: adminUser, error: adminCheckError } = await supabase
+      .from('admin_users')
+      .select('user_id')
+      .eq('user_id', authData.user.id)
+      .maybeSingle();
+
+    if (adminCheckError || !adminUser) {
+      console.error('Admin authorization error:', adminCheckError);
+      await supabase.auth.signOut();
+      setAdminLoading(false);
+      setAdminError('This account is not authorized as a salon owner.');
+      return;
+    }
+
+    setAdminLoggedIn(true);
+    setAdminPasswordInput('');
+
+    await loadAdminBookings();
+  }
+
+  async function adminLogout() {
+    await supabase.auth.signOut();
     setAdminLoggedIn(false);
     setAdminMode(false);
     setAdminEmailInput('');
@@ -1060,7 +1084,7 @@ export default function App() {
                 <div className="flex items-center justify-between mb-3">
                   <p style={{ fontFamily: FONT_DISPLAY, fontSize: 16, fontWeight: 700, color: COLORS.cream }}>Customer appointments</p>
                   <button
-                    onClick={handleAdminLogin}
+                    onClick={loadAdminBookings}
                     className="px-3 py-1.5 rounded-lg"
                     style={{ border: `1px solid ${COLORS.border}`, background: COLORS.card, color: COLORS.creamDim, fontFamily: FONT_BODY, fontSize: 10.5 }}
                   >
@@ -1163,7 +1187,7 @@ export default function App() {
           </button>
 
           <p style={{ fontFamily: FONT_BODY, fontSize: 10, color: COLORS.creamDim, marginTop: 12, textAlign: 'center' }}>
-            Owner access will be secured through Supabase Auth in the database setup.
+            Owner access is protected by Supabase Auth and the admin_users authorization table.
           </p>
         </div>
       );
