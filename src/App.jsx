@@ -35,7 +35,15 @@ const ADDONS = [
   { id: 'spa', name: 'Hair Spa Treatment', price: 249 },
 ];
 
-const TIME_SLOTS = ['10:00 AM', '11:30 AM', '1:00 PM', '2:30 PM', '4:00 PM', '5:30 PM', '7:00 PM'];
+const TIME_SLOTS = [
+  '10:00 AM', '10:30 AM', '11:00 AM', '11:30 AM',
+  '12:00 PM', '12:30 PM', '1:00 PM', '1:30 PM',
+  '2:00 PM', '2:30 PM', '3:00 PM', '3:30 PM',
+  '4:00 PM', '4:30 PM', '5:00 PM', '5:30 PM',
+  '6:00 PM', '6:30 PM', '7:00 PM', '7:30 PM',
+  '8:00 PM', '8:30 PM', '9:00 PM', '9:30 PM',
+  '10:00 PM'
+];
 
 const NAV_ITEMS = [
   { id: 'wallet', label: 'Wallet', icon: Wallet },
@@ -154,9 +162,16 @@ export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [phoneInput, setPhoneInput] = useState('');
   const [phone, setPhone] = useState('');
+  const [customerNameInput, setCustomerNameInput] = useState('');
+  const [adminMode, setAdminMode] = useState(false);
+  const [adminLoggedIn, setAdminLoggedIn] = useState(false);
+  const [adminEmailInput, setAdminEmailInput] = useState('');
+  const [adminPasswordInput, setAdminPasswordInput] = useState('');
+  const [adminError, setAdminError] = useState('');
+  const [adminBookings, setAdminBookings] = useState([]);
+  const [adminLoading, setAdminLoading] = useState(false);
   const [profileName, setProfileName] = useState('Guest');
   const [view, setView] = useState('home');
-  const [showDashboard, setShowDashboard] = useState(false);
 
   const [balance, setBalance] = useState(550);
   const [lockedBonus, setLockedBonus] = useState(0);
@@ -200,9 +215,77 @@ export default function App() {
   const isBooking = view.indexOf('book-') === 0;
 
   function handleLogin() {
-    setPhone(phoneInput || '98765 43210');
+    const name = customerNameInput.trim();
+    const mobile = phoneInput.trim();
+
+    if (!name) {
+      alert('Please enter your name.');
+      return;
+    }
+
+    if (!mobile) {
+      alert('Please enter your mobile number.');
+      return;
+    }
+
+    setProfileName(name);
+    setPhone(mobile);
     setLoggedIn(true);
     setView('home');
+  }
+
+  async function handleAdminLogin() {
+    const email = adminEmailInput.trim();
+    const password = adminPasswordInput;
+
+    if (!email || !password) {
+      setAdminError('Enter the admin email and password.');
+      return;
+    }
+
+    // Temporary app-level gate. We will replace this with Supabase Auth
+    // when we do the database/security changes.
+    const correctEmail = import.meta.env.VITE_ADMIN_EMAIL;
+    const correctPassword = import.meta.env.VITE_ADMIN_PASSWORD;
+
+    if (!correctEmail || !correctPassword) {
+      setAdminError('Admin credentials are not configured yet.');
+      return;
+    }
+
+    if (email !== correctEmail || password !== correctPassword) {
+      setAdminError('Incorrect admin email or password.');
+      return;
+    }
+
+    setAdminError('');
+    setAdminLoggedIn(true);
+    setAdminLoading(true);
+
+    const { data, error } = await supabase
+      .from('bookings')
+      .select('id, customer_id, customer_name, customer_phone, service_id, booking_date, booking_time, total_amount, payment_method, status, created_at')
+      .order('booking_date', { ascending: true })
+      .order('booking_time', { ascending: true });
+
+    if (error) {
+      console.error('Admin bookings error:', error);
+      setAdminError('Could not load bookings. Check Supabase permissions.');
+      setAdminBookings([]);
+    } else {
+      setAdminBookings(data || []);
+    }
+
+    setAdminLoading(false);
+  }
+
+  function adminLogout() {
+    setAdminLoggedIn(false);
+    setAdminMode(false);
+    setAdminEmailInput('');
+    setAdminPasswordInput('');
+    setAdminError('');
+    setAdminBookings([]);
   }
 
   function handleToggleAddon(id) {
@@ -232,75 +315,140 @@ export default function App() {
   }
 
   async function confirmBooking() {
-  const total = serviceTotal();
-  const svc = SERVICES.find((s) => s.id === bookingService);
+    const total = serviceTotal();
+    const svc = SERVICES.find((s) => s.id === bookingService);
 
-  if (!svc) {
-    console.error('Service not found');
-    return;
+    if (!svc) {
+      console.error('Service not found');
+      return;
+    }
+
+    const customerName = profileName.trim();
+    const customerPhone = phone.trim();
+
+    if (!customerName || !customerPhone) {
+      alert('Customer name and phone number are required.');
+      return;
+    }
+
+    try {
+      // Find the existing customer using their phone number.
+      const { data: existingCustomer, error: findError } = await supabase
+        .from('customers')
+        .select('id, name, phone')
+        .eq('phone', customerPhone)
+        .maybeSingle();
+
+      if (findError) {
+        console.error('Customer lookup error:', findError);
+        alert('Could not find customer. Please try again.');
+        return;
+      }
+
+      let customer;
+
+      // Create a customer record if this phone number is new.
+      if (!existingCustomer) {
+        const { data: newCustomer, error: createError } = await supabase
+          .from('customers')
+          .insert({
+            name: customerName,
+            phone: customerPhone,
+          })
+          .select('id, name, phone')
+          .single();
+
+        if (createError) {
+          console.error('Customer creation error:', createError);
+          alert('Could not create customer. Please try again.');
+          return;
+        }
+
+        customer = newCustomer;
+      } else {
+        customer = existingCustomer;
+
+        // Keep the customer's name up to date.
+        if (customer.name !== customerName) {
+          const { error: updateError } = await supabase
+            .from('customers')
+            .update({ name: customerName })
+            .eq('id', customer.id);
+
+          if (updateError) {
+            console.error('Customer update error:', updateError);
+          }
+        }
+      }
+
+      console.log('Customer:', customer);
+
+      // Save the booking and link it to the customer.
+      const { data, error } = await supabase
+        .from('bookings')
+        .insert({
+          customer_id: customer.id,
+          customer_name: customerName,
+          customer_phone: customerPhone,
+          service_id: svc.dbId,
+          booking_date: bookingDate,
+          booking_time: bookingSlot,
+          status: 'confirmed',
+          payment_method: bookingPayment,
+          total_amount: total,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Booking save error:', error);
+        alert('Booking could not be saved. Check the console.');
+        return;
+      }
+
+      console.log('Booking saved:', data);
+
+      if (bookingPayment === 'wallet') {
+        setBalance((b) => b - total);
+      }
+
+      if (lockedBonus > 0) {
+        setBalance((b) => b + lockedBonus);
+        setLockedBonus(0);
+      }
+
+      setVisits((v) => v + 1);
+
+      setTransactions((t) => [
+        {
+          id: Date.now(),
+          label: `${svc.name}${bookingAddons.length ? ' + add-ons' : ''}`,
+          amount: -total,
+          date: bookingDate,
+        },
+        ...t,
+      ]);
+
+      setLastBookingTotal(total);
+
+      setAddonSales((prev) => {
+        const next = { ...prev };
+        bookingAddons.forEach((id) => {
+          next[id] = (next[id] || 0) + 1;
+        });
+        return next;
+      });
+
+      setSessionBookingsCount((c) => c + 1);
+      setSessionRevenue((r) => r + total);
+
+      setView('book-confirm');
+    } catch (err) {
+      console.error('Unexpected booking error:', err);
+      alert('Something went wrong while booking.');
+    }
   }
 
-  // Save booking to Supabase
-  const { data, error } = await supabase
-    .from('bookings')
-    .insert({
-       customer_name: profileName,
-      customer_phone: phone,
-      service_id: svc.dbId,
-      booking_date: bookingDate,
-      booking_time: bookingSlot,
-      status: 'confirmed',
-      payment_method: bookingPayment,
-      total_amount: total,
-    })
-    .select()
-    .single();
-
-  if (error) {
-    console.error('Booking save error:', error);
-    alert('Booking could not be saved. Check the console.');
-    return;
-  }
-
-  console.log('Booking saved:', data);
-
-  // Keep the existing app behavior
-  if (bookingPayment === 'wallet') {
-    setBalance((b) => b - total);
-  }
-
-  if (lockedBonus > 0) {
-    setBalance((b) => b + lockedBonus);
-    setLockedBonus(0);
-  }
-
-  setVisits((v) => v + 1);
-
-  setTransactions((t) => [
-    {
-      id: Date.now(),
-      label: `${svc.name}${bookingAddons.length ? ' + add-ons' : ''}`,
-      amount: -total,
-      date: bookingDate,
-    },
-    ...t,
-  ]);
-
-  setLastBookingTotal(total);
-
-  setAddonSales((prev) => {
-    const next = { ...prev };
-    bookingAddons.forEach((id) => {
-      next[id] = (next[id] || 0) + 1;
-    });
-    return next;
-  });
-
-  setSessionBookingsCount((c) => c + 1);
-  setSessionRevenue((r) => r + total);
-
-  setView('book-confirm');
-}
   function markReferralRewarded(id) {
     setReferrals((rs) => rs.map((r) => (r.id === id ? { ...r, status: 'rewarded' } : r)));
     setBalance((b) => b + 100);
@@ -336,14 +484,17 @@ export default function App() {
                 Shop no.6&7,chavan tower, opposite SBI Bank, sahakar Nagar, Chh.sambhajinagar Chh, Chhartapati Sambhajinagar, Maharashtra 431001
               </p>
             </div>
-            <div className="flex gap-2 mt-4">
-              <a href="tel:7499376437" className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl" style={{ border: `1px solid ${COLORS.border}`, fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.cream, textDecoration: 'none', background: COLORS.card }}>
-                <Phone size={13} /> Call salon
+            <div className="grid grid-cols-2 gap-2 mt-4">
+              <a href="tel:7058402980" className="flex items-center justify-center gap-2 py-2.5 rounded-xl" style={{ border: `1px solid ${COLORS.border}`, fontFamily: FONT_BODY, fontSize: 12, color: COLORS.cream, textDecoration: 'none', background: COLORS.card }}>
+                <Phone size={13} /> 7058402980
               </a>
-              <button onClick={() => setView('book-service')} className="flex-1 py-2.5 rounded-xl" style={{ background: `linear-gradient(150deg, ${COLORS.goldLight}, ${COLORS.gold})`, color: COLORS.bg, fontFamily: FONT_BODY, fontWeight: 700, fontSize: 12.5, boxShadow: '0 6px 18px rgba(201,150,46,0.35)' }}>
-                Book Now
-              </button>
+              <a href="tel:8421143915" className="flex items-center justify-center gap-2 py-2.5 rounded-xl" style={{ border: `1px solid ${COLORS.border}`, fontFamily: FONT_BODY, fontSize: 12, color: COLORS.cream, textDecoration: 'none', background: COLORS.card }}>
+                <Phone size={13} /> 8421143915
+              </a>
             </div>
+            <button onClick={() => setView('book-service')} className="w-full mt-2 py-2.5 rounded-xl" style={{ background: `linear-gradient(150deg, ${COLORS.goldLight}, ${COLORS.gold})`, color: COLORS.bg, fontFamily: FONT_BODY, fontWeight: 700, fontSize: 12.5, boxShadow: '0 6px 18px rgba(201,150,46,0.35)' }}>
+              Book Now
+            </button>
           </div>
         </div>
 
@@ -644,10 +795,10 @@ export default function App() {
         </div>
 
         <div className="p-4 rounded-2xl" style={{ background: COLORS.cardAlt, border: `1px solid ${COLORS.border}` }}>
-          <Toggle checked={showDashboard} onChange={setShowDashboard} label="Owner view \u2014 see the whole business" last />
+          <p style={{ fontFamily: FONT_BODY, fontSize: 12, color: COLORS.creamDim }}>
+            Your appointments and profile are linked to your name and mobile number.
+          </p>
         </div>
-
-        {showDashboard && renderDashboard()}
 
         <button
           onClick={() => { setLoggedIn(false); setView('home'); setPhoneInput(''); }}
@@ -872,6 +1023,152 @@ export default function App() {
   }
 
   function renderLogin() {
+    if (adminMode) {
+      if (adminLoggedIn) {
+        const totalRevenue = adminBookings.reduce((sum, b) => sum + Number(b.total_amount || 0), 0);
+
+        return (
+          <div className="flex flex-col min-h-screen">
+            <div className="flex items-center justify-between px-4 py-4" style={{ borderBottom: `1px solid ${COLORS.border}` }}>
+              <div>
+                <p style={{ fontFamily: FONT_BODY, fontSize: 10, color: COLORS.gold }}>OWNER / ADMIN</p>
+                <h1 style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, color: COLORS.cream }}>Happy's Unisex Salon</h1>
+              </div>
+              <button
+                onClick={adminLogout}
+                className="flex items-center gap-2 px-3 py-2 rounded-xl"
+                style={{ border: `1px solid ${COLORS.border}`, background: COLORS.card }}
+              >
+                <LogOut size={14} color={COLORS.creamDim} />
+                <span style={{ fontFamily: FONT_BODY, fontSize: 11, color: COLORS.creamDim }}>Logout</span>
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-4 py-5 flex flex-col gap-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-4 rounded-2xl" style={{ background: COLORS.card, border: `1px solid ${COLORS.border}` }}>
+                  <p style={{ fontFamily: FONT_DISPLAY, fontSize: 22, fontWeight: 700, color: COLORS.cream }}>{adminBookings.length}</p>
+                  <p style={{ fontFamily: FONT_BODY, fontSize: 10.5, color: COLORS.creamDim, marginTop: 2 }}>Total bookings</p>
+                </div>
+                <div className="p-4 rounded-2xl" style={{ background: COLORS.card, border: `1px solid ${COLORS.border}` }}>
+                  <p style={{ fontFamily: FONT_DISPLAY, fontSize: 22, fontWeight: 700, color: COLORS.goldLight }}>{formatINR(totalRevenue)}</p>
+                  <p style={{ fontFamily: FONT_BODY, fontSize: 10.5, color: COLORS.creamDim, marginTop: 2 }}>Booking revenue</p>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <p style={{ fontFamily: FONT_DISPLAY, fontSize: 16, fontWeight: 700, color: COLORS.cream }}>Customer appointments</p>
+                  <button
+                    onClick={handleAdminLogin}
+                    className="px-3 py-1.5 rounded-lg"
+                    style={{ border: `1px solid ${COLORS.border}`, background: COLORS.card, color: COLORS.creamDim, fontFamily: FONT_BODY, fontSize: 10.5 }}
+                  >
+                    Refresh
+                  </button>
+                </div>
+
+                {adminLoading ? (
+                  <p style={{ fontFamily: FONT_BODY, fontSize: 12, color: COLORS.creamDim }}>Loading bookings...</p>
+                ) : adminBookings.length === 0 ? (
+                  <div className="p-4 rounded-xl" style={{ background: COLORS.card, border: `1px solid ${COLORS.border}` }}>
+                    <p style={{ fontFamily: FONT_BODY, fontSize: 12, color: COLORS.creamDim }}>No bookings found.</p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {adminBookings.map((booking) => (
+                      <div key={booking.id} className="p-4 rounded-xl" style={{ background: COLORS.card, border: `1px solid ${COLORS.border}` }}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 700, color: COLORS.cream }}>
+                              {booking.customer_name || 'Unnamed customer'}
+                            </p>
+                            <p style={{ fontFamily: FONT_BODY, fontSize: 10.5, color: COLORS.creamDim, marginTop: 3 }}>
+                              {booking.customer_phone || 'No phone'}
+                            </p>
+                            <p style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: COLORS.cream, marginTop: 8 }}>
+                              {booking.booking_date} · {booking.booking_time}
+                            </p>
+                          </div>
+                          <p style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, color: COLORS.goldLight, flexShrink: 0 }}>
+                            {formatINR(booking.total_amount)}
+                          </p>
+                        </div>
+                        <div className="flex items-center justify-between mt-3 pt-3" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                          <span style={{ fontFamily: FONT_BODY, fontSize: 10.5, color: COLORS.creamDim }}>
+                            {booking.payment_method === 'wallet' ? 'Wallet' : 'Pay at salon'}
+                          </span>
+                          <span style={{ fontFamily: FONT_BODY, fontSize: 10.5, color: COLORS.green, fontWeight: 600 }}>
+                            {booking.status || 'confirmed'}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="flex flex-col justify-center px-6" style={{ minHeight: '100vh' }}>
+          <div className="flex flex-col items-center mb-8">
+            <span style={{ width: 64, height: 64, borderRadius: 18, background: `linear-gradient(150deg, ${COLORS.goldLight}, ${COLORS.gold})`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 18, boxShadow: '0 10px 30px rgba(201,150,46,0.4)' }}>
+              <BarChart3 size={30} color={COLORS.bg} />
+            </span>
+            <h1 className="tracking-tight" style={{ fontFamily: FONT_DISPLAY, fontSize: 25, fontWeight: 700, color: COLORS.cream, textAlign: 'center' }}>Owner Login</h1>
+            <p style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.creamDim, marginTop: 6, textAlign: 'center' }}>
+              Private salon management panel
+            </p>
+          </div>
+
+          <label style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: COLORS.creamDim, marginBottom: 6 }}>Admin email</label>
+          <input
+            type="email"
+            value={adminEmailInput}
+            onChange={(e) => { setAdminEmailInput(e.target.value); setAdminError(''); }}
+            placeholder="owner@example.com"
+            className="w-full px-4 py-3 rounded-xl mb-4"
+            style={{ background: COLORS.card, border: `1px solid ${COLORS.border}`, color: COLORS.cream, fontFamily: FONT_BODY, fontSize: 14.5, outline: 'none' }}
+          />
+
+          <label style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: COLORS.creamDim, marginBottom: 6 }}>Password</label>
+          <input
+            type="password"
+            value={adminPasswordInput}
+            onChange={(e) => { setAdminPasswordInput(e.target.value); setAdminError(''); }}
+            placeholder="Enter password"
+            className="w-full px-4 py-3 rounded-xl mb-3"
+            style={{ background: COLORS.card, border: `1px solid ${COLORS.border}`, color: COLORS.cream, fontFamily: FONT_BODY, fontSize: 14.5, outline: 'none' }}
+          />
+
+          {adminError && (
+            <p style={{ fontFamily: FONT_BODY, fontSize: 11, color: COLORS.coral, marginBottom: 10 }}>
+              {adminError}
+            </p>
+          )}
+
+          <button onClick={handleAdminLogin} className="w-full py-3 rounded-xl" style={{ background: `linear-gradient(150deg, ${COLORS.goldLight}, ${COLORS.gold})`, color: COLORS.bg, fontFamily: FONT_BODY, fontWeight: 700, fontSize: 14.5 }}>
+            Login as Owner
+          </button>
+
+          <button
+            onClick={() => { setAdminMode(false); setAdminError(''); }}
+            className="w-full py-3 rounded-xl mt-3"
+            style={{ border: `1px solid ${COLORS.border}`, background: 'transparent', color: COLORS.creamDim, fontFamily: FONT_BODY, fontSize: 12.5 }}
+          >
+            Back to Customer Login
+          </button>
+
+          <p style={{ fontFamily: FONT_BODY, fontSize: 10, color: COLORS.creamDim, marginTop: 12, textAlign: 'center' }}>
+            Owner access will be secured through Supabase Auth in the database setup.
+          </p>
+        </div>
+      );
+    }
+
     return (
       <div className="flex flex-col justify-center px-6" style={{ minHeight: '100vh' }}>
         <div className="flex flex-col items-center mb-8">
@@ -880,27 +1177,46 @@ export default function App() {
           </span>
           <h1 className="tracking-tight" style={{ fontFamily: FONT_DISPLAY, fontSize: 25, fontWeight: 700, color: COLORS.cream, textAlign: 'center' }}>Happy's Unisex Salon</h1>
           <p style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.creamDim, marginTop: 6, textAlign: 'center', lineHeight: 1.5, maxWidth: 260 }}>
-            Real business flow &mdash; five screens that turn one visit into repeat business.
+            Book your salon appointment quickly and easily.
           </p>
         </div>
+
+        <label style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: COLORS.creamDim, marginBottom: 6 }}>Your name</label>
+        <input
+          value={customerNameInput}
+          onChange={(e) => setCustomerNameInput(e.target.value)}
+          placeholder="Enter your name"
+          className="w-full px-4 py-3 rounded-xl mb-4"
+          style={{ background: COLORS.card, border: `1px solid ${COLORS.border}`, color: COLORS.cream, fontFamily: FONT_BODY, fontSize: 14.5, outline: 'none' }}
+        />
+
         <label style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: COLORS.creamDim, marginBottom: 6 }}>Phone number</label>
         <input
           value={phoneInput}
           onChange={(e) => setPhoneInput(e.target.value)}
           placeholder="98765 43210"
+          inputMode="tel"
           className="w-full px-4 py-3 rounded-xl mb-4"
           style={{ background: COLORS.card, border: `1px solid ${COLORS.border}`, color: COLORS.cream, fontFamily: FONT_BODY, fontSize: 14.5, outline: 'none' }}
         />
+
         <button onClick={handleLogin} className="w-full py-3 rounded-xl" style={{ background: `linear-gradient(150deg, ${COLORS.goldLight}, ${COLORS.gold})`, color: COLORS.bg, fontFamily: FONT_BODY, fontWeight: 700, fontSize: 14.5, boxShadow: '0 8px 24px rgba(201,150,46,0.35)' }}>
           Continue
         </button>
-        <p style={{ fontFamily: FONT_BODY, fontSize: 10.5, color: COLORS.creamDim, marginTop: 10, textAlign: 'center' }}>Demo mode &mdash; any number gets you in.</p>
+
+        <button
+          onClick={() => { setAdminMode(true); setAdminError(''); }}
+          className="w-full py-3 rounded-xl mt-3"
+          style={{ border: `1px solid ${COLORS.border}`, background: 'transparent', color: COLORS.creamDim, fontFamily: FONT_BODY, fontSize: 12.5 }}
+        >
+          Owner / Admin Login
+        </button>
       </div>
     );
   }
 
   function renderContent() {
-    if (!loggedIn) return renderLogin();
+    if (!loggedIn || adminMode) return renderLogin();
     if (isBooking) return renderBooking();
     return (
       <>
